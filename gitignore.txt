@@ -1,0 +1,6 @@
+# Python 运行时生成的字节码缓存
+__pycache__/
+*.py[cod]
+
+# 一次漫游的存档(config.SAVE_PATH 默认写在这里),属于个人游玩痕迹,不入库
+wander.json
