@@ -37,11 +37,14 @@ NAME_POOL = {
 }
 
 
-def descendant_name(species: str, base_id: str, gen: int, parent_name: str) -> str:
+def descendant_name(species: str, base_id: str, gen: int, parent_name: str,
+                    reserved=frozenset()) -> str:
     """给子代取名。按家系与世代做确定性抽取(可复现、可单测),
-    并保证两件事:
+    并保证三件事:
     1. 不同海的同种家系不再同步撞名(以前是 gen % 池长,全海一个节拍);
-    2. 子代不会顶着父代刚放下的名字(名字的轮回要隔几代才动人)。
+    2. 子代不会顶着父代刚放下的名字(名字的轮回要隔几代才动人);
+    3. 不碰 reserved 里的名字——调用方把"玩家见过且还活着"的名字全海收进来,
+       免得沉船的接班人顶上礁上老朋友的名字,让哀伤的信号打错对象。
     名字池是轮回的:隔上几代,"一寸"还是会在新的一茬身上复活——这是特性,不是bug。"""
     pool = NAME_POOL.get(species, [])
     if not pool:
@@ -49,7 +52,10 @@ def descendant_name(species: str, base_id: str, gen: int, parent_name: str) -> s
     if len(pool) == 1:
         return pool[0]
     rng = _random.Random(f"{base_id}:{gen}")
-    return rng.choice([n for n in pool if n != parent_name])
+    candidates = [n for n in pool if n != parent_name and n not in reserved]
+    if not candidates:  # 池被占尽时退回旧行为:撞个名总好过没名字
+        candidates = [n for n in pool if n != parent_name]
+    return rng.choice(candidates)
 
 
 def downgrade_memory(level: str) -> str:
@@ -64,11 +70,11 @@ def upgrade_memory(level: str) -> str:
     return MEMORY_LEVELS[max(i - 1, 0)]
 
 
-def make_descendant(node: dict, born_at: int) -> dict:
+def make_descendant(node: dict, born_at: int, reserved=frozenset()) -> dict:
     """由父代生成子代。纯函数,不改入参。友善按比例继承,记忆降一档。"""
     gen = node["generation"] + 1
     base_id = node["id"].rsplit("_gen", 1)[0]
-    name = descendant_name(node["species"], base_id, gen, node["name"])
+    name = descendant_name(node["species"], base_id, gen, node["name"], reserved)
     return {
         "id": f"{base_id}_gen{gen}",
         "name": name,
@@ -86,7 +92,7 @@ def make_descendant(node: dict, born_at: int) -> dict:
     }
 
 
-def settle_node(node: dict, now: int):
+def settle_node(node: dict, now: int, reserved=frozenset()):
     """把一个节点推演到 now。elapsed 远超寿命时循环换代。
 
     返回 (当前存活节点, 事件列表)。事件供叙事用,不上屏。
@@ -95,37 +101,42 @@ def settle_node(node: dict, now: int):
     current = dict(node)
     while now - current["born_at"] >= current["lifespan"]:
         died_at = current["born_at"] + current["lifespan"]
-        child = make_descendant(current, born_at=died_at)
+        child = make_descendant(current, born_at=died_at, reserved=reserved)
         events.append({"type": "succession", "old_id": current["id"],
                        "new_id": child["id"], "at": died_at})
         current = child
     return current, events
 
 
-def settle_region(region: dict, now: int):
-    """结算一片海域:推演所有家系。纯函数。"""
+def settle_region(region: dict, now: int, reserved=frozenset()):
+    """结算一片海域:推演所有家系。纯函数。
+
+    reserved:换代取名要绕开的名字。同一片海的去重 _dedupe_living_names 自己管;
+    这份名单管的是全海——玩家的情感记账不分海域,调用方(引擎)把
+    "玩家见过且还活着"的名字收齐了传进来。"""
     new_region = dict(region)
     all_events, new_lineages = [], []
     for node in region.get("lineages", []):
-        settled, events = settle_node(node, now)
+        settled, events = settle_node(node, now, reserved)
         new_lineages.append(settled)
         all_events.extend(events)
-    _dedupe_living_names(new_lineages)
+    _dedupe_living_names(new_lineages, reserved)
     new_region["lineages"] = new_lineages
     new_region["last_visit"] = now
     return new_region, all_events
 
 
-def _dedupe_living_names(lineages: list) -> None:
+def _dedupe_living_names(lineages: list, reserved=frozenset()) -> None:
     """同一片海里,活着的两条家系不该同时顶着一个名字——玩家会绕晕,
     叙事会露馅(两丛管虫的接班人都叫\"急急\",像复制粘贴)。
-    后结算的那条让名:确定性地(按 id 播种)从池里另抽一个没被占用的。
+    后结算的那条让名:确定性地(按 id 播种)从池里另抽一个没被占用的,
+    也不抽 reserved 里的(别处还活着的老朋友的名字)。
     只动 settle_node 刚复制出来的新节点,不碰入参,settle_region 仍是纯函数。"""
     taken = set()
     for node in lineages:
         if node["name"] in taken:
             pool = NAME_POOL.get(node["species"], [])
-            free = [n for n in pool if n not in taken]
+            free = [n for n in pool if n not in taken and n not in reserved]
             if free:
                 rng = _random.Random(f"{node['id']}:dedupe")
                 node["name"] = rng.choice(free)
