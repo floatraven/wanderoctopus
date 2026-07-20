@@ -143,10 +143,22 @@ class Game:
             self.world["dwell"][rid] = self.world["dwell"].get(rid, 0) + tides
             self._maybe_unlock_proverb(rid)
 
+    def _reserved_names(self) -> set:
+        """换代取名要绕开的名字:玩家亲眼见过、且还活着的,全海范围。
+        去重只管同一片海不够——玩家的情感记账是全海的:初始好友的名字被
+        别的海的家系顶上,哀伤的信号会打错对象(你会以为礁上那只死了)。
+        以各海最后一次结算的在场者为准:一条家系的死讯要等玩家亲眼读到,
+        名字才算放回池里。"""
+        seen = set(self.world.get("seen_ids", []))
+        return {n["name"]
+                for region in self.world["regions"].values()
+                for n in region.get("lineages", [])
+                if n["id"] in seen}
+
     def _settle_here(self):
         """把当前海域(及其痕迹、跟随的阿龟)结算到此刻。"""
         rid = self.world["current_region"]
-        region, _ = settle_region(self._region, self._now)
+        region, _ = settle_region(self._region, self._now, self._reserved_names())
         self.world["regions"][rid] = region
         # 阿龟跟随:她也随时间推演(实际不换代,但保持接口一致)
         self.world["turtle"], _ = settle_node(self.world["turtle"], self._now)
@@ -201,7 +213,7 @@ class Game:
                 # 让"看着它老"发生在"它没了"之前,换代才不是一个突兀的开关。
                 lines.append(self.rng.choice([
                     f"{aft['name']}还在,只是老了些——还守着老地方,动作慢了半拍。",
-                    f"{aft['name']}没换代,可你看得出这些潮没绕开它。它还认得你游来的方向。",
+                    f"{aft['name']}没换代,可你看得出它老了——这些潮没绕开它。它还认得你游来的方向。",
                     f"{aft['name']}老了。它自己大概也知道——它待着不动的时候,比从前多了。",
                 ]))
         for bef, aft in zip(before["traces"], after["traces"]):
@@ -833,6 +845,8 @@ class Game:
             return "这片热泉边没有管虫了。"
         tides = max(6, int(tides))
         before_info = [(w["name"], w["generation"], w["id"]) for w in worms]
+        # 接下来这次结算取名时会绕开的名单——中间世代的重建要用同一份,链才不分叉
+        reserved = self._reserved_names()
         self._pass_time(tides)
         self._settle_here()
         worms_after = [n for n in self._region["lineages"] if n["species"] == "tubeworm"]
@@ -852,7 +866,7 @@ class Game:
                 if changes <= 3:
                     names, prev = [], name_before
                     for i in range(gen_before + 1, gen_after + 1):
-                        prev = descendant_name("tubeworm", base, i, prev)
+                        prev = descendant_name("tubeworm", base, i, prev, reserved)
                         names.append(prev)
                     parts.append(f"{name_before}弯下去了。")
                     for nm in names[:-1]:

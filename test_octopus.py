@@ -508,6 +508,33 @@ def test_descendant_never_repeats_parent_name():
         node = child
 
 
+def test_descendant_name_avoids_reserved():
+    from lineage import descendant_name, NAME_POOL
+    for gen in range(1, 20):
+        name = descendant_name("crab", "crab_wreck_015", gen, "锅底",
+                               reserved={"小螯"})
+        assert name != "小螯"
+    # 池被占尽时退回旧行为(撞个名总好过没名字),但父代名照样不重
+    reserved = set(NAME_POOL["anglerfish"])
+    name = descendant_name("anglerfish", "x", 1, "灯灯", reserved=reserved)
+    assert name in NAME_POOL["anglerfish"] and name != "灯灯"
+
+
+def test_succession_never_takes_living_seen_friends_name_across_seas():
+    """跨海撞名:沉船的螃蟹换代,不该顶上礁上还活着的小螯的名字。
+    去重只管同一片海,但玩家的情感记账是全海的——初始好友的名字被
+    别的家系顶上,枯坐后的哀伤叙述会打错对象(你会以为礁上那只死了)。"""
+    g = Game.new()
+    g.greet("小螯")            # 亲眼见过礁上的小螯,它记进 seen_ids
+    g.travel("wreck")          # 130 潮 > 蟹寿 120:沉船的蟹在路上换了代
+    wreck = g.world["regions"]["wreck"]["lineages"]
+    assert any(n["species"] == "crab" and n["generation"] >= 1 for n in wreck)
+    assert "小螯" not in {n["name"] for n in wreck}
+    # 枯坐再推几代,名字池轮回也轮不到还活着的老朋友头上
+    g.linger(400)
+    assert "小螯" not in {n["name"] for n in g.world["regions"]["wreck"]["lineages"]}
+
+
 def test_watch_turnover_names_match_engine():
     """播报里最后一个名字必须等于结算后真正活着的那只。"""
     import random
