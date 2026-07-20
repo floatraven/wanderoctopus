@@ -674,3 +674,89 @@ def test_old_save_migrates_single_letter_into_stack():
     migrated = W._migrate(old)
     assert migrated["letters"] == [{"text": "旧档里的一句话", "at": 3}]
     assert migrated["seen_ids"] == []
+
+
+# ---------- 改1:阿龟的时代与不复读 ----------
+def test_turtle_arrival_changes_with_era():
+    import dialogue as D
+    g = Game.new()
+    early = g.greet("阿龟")
+    assert any(a in early for a in D.TURTLE_ARRIVE["early"]), early
+    g.world["clock"] = 2000            # 直接把认识的年头拨到"老朋友"档
+    late = g.greet("阿龟")
+    assert any(a in late for a in D.TURTLE_ARRIVE["late"]), late
+
+
+def test_turtle_does_not_repeat_arrival_back_to_back():
+    import random
+    for seed in range(20):
+        g = Game.new()
+        g.rng = random.Random(seed)
+        import dialogue as D
+        first = g.greet("阿龟")
+        second = g.greet("阿龟")
+        a1 = next(a for a in D.TURTLE_ARRIVE["early"] if a in first)
+        assert a1 not in second, (seed, second)
+
+
+# ---------- 改2:一潮之内连看两眼,第二眼是增量 ----------
+def test_second_look_is_incremental():
+    g = Game.new()
+    full = g.look()
+    again = g.look()
+    assert len(again) < len(full)
+    assert "阳光斜斜切下来" not in again      # 不重画场景
+    assert "想走的话" in again               # 但去处还在
+    g.greet("小螯")                          # 过了一潮
+    assert "阳光斜斜切下来" in g.look()      # 又是完整的一眼
+
+
+# ---------- 改3:石与贝,两种告别 ----------
+def test_shell_carried_when_created_at_odd():
+    tr = T.new_shell_spiral("reef", now=1)   # 奇数 → 被搬走那一岔
+    tr = T.settle_trace(tr, now=201, region_has_crabs=True)
+    assert tr["adopted_by"] == "carried"
+    assert "搬" in T.describe_trace(tr)
+
+
+def test_stone_never_continued_or_carried():
+    for start in (0, 1):
+        tr = T.new_stone_pile("reef", now=start)
+        tr = T.settle_trace(tr, now=start + 200, region_has_crabs=True)
+        assert tr["adopted_by"] == "crab_family"
+
+
+# ---------- 改4:换代之前,先看着它老 ----------
+def test_linger_narrates_old_age_before_succession():
+    g = Game.new()
+    g.greet("小螯")                # 亲眼见过,才谈得上"你看得出它老了"
+    out = g.linger(100)            # 螃蟹寿命 120:老了,还没换代
+    crab = next(n for n in g.world["regions"]["reef"]["lineages"]
+                if n["species"] == "crab")
+    assert crab["generation"] == 0
+    assert "老了" in out, out
+
+
+# ---------- 改5:回声落地即走样,且会在半路迎你 ----------
+def test_echo_lands_already_drifted():
+    g = Game.new()
+    g.teach_song("slow_grow")
+    g.linger(100)
+    echo = next(t for t in g.world["traces"]
+                if t["type"] == "song" and t.get("echo"))
+    assert T.song_has_drifted(echo, g.world["clock"])
+
+
+def test_travel_foreshadows_echo_of_your_song():
+    import random
+    found = False
+    for seed in range(40):
+        g = Game.new()
+        g.rng = random.Random(seed)
+        g.teach_song("slow_grow")
+        g.linger(100)              # 回声飘去邻海
+        out = g.travel("kelp")
+        if "比你先一步" in out:
+            found = True
+            break
+    assert found, "40 个种子里,回声一次都没在半路迎过你"

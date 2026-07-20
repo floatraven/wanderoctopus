@@ -79,10 +79,16 @@ TRACE_STAGES = {
         "intact": "你摆的贝壳螺旋还在,一圈一圈朝里卷。",
         "half": "螺旋被海流冲开了小半,外圈的贝壳不见了。",
         "scattered": "只剩里头小半圈贝壳,弯着,像谁随手撇下的。",
-        "adopted": "残缺的螺旋成了一窝小螃蟹的记号,它们绕着它转。",
+        "adopted": "残缺的螺旋成了一窝小螃蟹的记号,它们绕着它转。",  # 旧档遗留态,新档不再产生
         "continued": "你摆的螺旋塌了半圈,又被谁续上了几枚——方向不对,间距也不对,可它还在往里卷。像一句被接错了、却没人肯停下的话。",
+        "carried": "你摆的贝壳被小螃蟹们一枚一枚搬走了,搬去垫自己的洞口。螺旋没了——它散进了好多户人家的门前。",
     },
 }
+
+# 石头和贝壳不该塌成同一种下场:
+#   石头沉、搬不动 → 塌在原地,被认成"老地方",变成别人的路标(聚)。
+#   贝壳轻、拿得走 → 要么被不认识的谁接着摆(续),要么被一枚一枚搬散(散)。
+# 选哪个留痕,从此是两种告别。
 
 
 def new_stone_pile(region_id: str, now: int) -> dict:
@@ -115,12 +121,16 @@ def settle_trace(trace: dict, now: int, region_has_crabs: bool) -> dict:
     t = dict(trace)
     elapsed = now - t["created_at"]
     t["integrity"] = max(0.0, 1.0 - elapsed * TRACE_DECAY_PER_TIDE)
-    if t["integrity"] < 0.5 and region_has_crabs and not t["adopted_by"]:
-        # 贝壳螺旋有两种下场:被认领成"老地方",或被不认识的谁接着往下摆。
-        # 用 created_at 的奇偶做确定性分岔——不引入随机,存档可复现。
-        if t["type"] == "shell_spiral" and t["created_at"] % 2 == 0:
-            t["adopted_by"] = "continued"
-        else:
+    if t["integrity"] < 0.5 and not t["adopted_by"]:
+        # 分岔用 created_at 的奇偶做确定性选择——不引入随机,存档可复现。
+        if t["type"] == "shell_spiral":
+            # 贝壳:被不认识的谁续摆(不需要螃蟹),或被螃蟹一枚枚搬走。
+            if t["created_at"] % 2 == 0:
+                t["adopted_by"] = "continued"
+            elif region_has_crabs:
+                t["adopted_by"] = "carried"
+        elif region_has_crabs:
+            # 石头:塌在原地,被螃蟹家系认成"老地方"。
             t["adopted_by"] = "crab_family"
     return t
 
@@ -128,8 +138,8 @@ def settle_trace(trace: dict, now: int, region_has_crabs: bool) -> dict:
 def trace_stage(trace: dict) -> str:
     """实物痕迹此刻处于哪一态:intact / half / scattered / adopted。
     跨代叙述("石堆塌了半边")靠比对这个态的变化来触发。"""
-    if trace.get("adopted_by") == "continued":
-        return "continued"
+    if trace.get("adopted_by") in ("continued", "carried"):
+        return trace["adopted_by"]
     if trace.get("adopted_by"):
         return "adopted"
     i = trace["integrity"]

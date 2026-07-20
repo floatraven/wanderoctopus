@@ -78,6 +78,7 @@ class Game:
         # 本世是否已把"上一个自己留的信"递出去过。留信的当世不回响给自己;
         # 只有下一个载入的实例,才会从阿龟嘴里听到它。不入存档,随实例而生。
         self._letter_delivered = False
+        self._fresh_look = None   # (region, clock):刚完整环顾过的那一眼
 
     def __getattr__(self, name):
         # 玩家(一个 AI)会照着散文猜方法名。猜错了不该拿到一句冷冰冰的
@@ -170,7 +171,8 @@ class Game:
         lineages = {}
         for n in reg["lineages"]:
             root = n["id"].rsplit("_gen", 1)[0]
-            lineages[root] = {"name": n["name"], "gen": n["generation"], "id": n["id"]}
+            lineages[root] = {"name": n["name"], "gen": n["generation"], "id": n["id"],
+                              "frac": (ref_clock - n["born_at"]) / max(1, n["lifespan"])}
         traces = []  # 痕迹从不删除、不重排,按位置对齐即可,无需额外 id
         for t in self.world["traces"]:
             if t["region"] != rid:
@@ -193,6 +195,15 @@ class Game:
                 lines.append(self._succession_line(
                     bef["name"], aft["name"], aft["gen"] - bef["gen"],
                     met=bef.get("id") in seen))
+            elif (bef and aft["gen"] == bef["gen"] and bef.get("id") in seen
+                  and bef.get("frac", 0) < C.OLD_AGE_FRAC <= aft.get("frac", 0)):
+                # 中间态:还是它,但潮水已经在它身上过了大半——
+                # 让"看着它老"发生在"它没了"之前,换代才不是一个突兀的开关。
+                lines.append(self.rng.choice([
+                    f"{aft['name']}还在,只是老了些——还守着老地方,动作慢了半拍。",
+                    f"{aft['name']}没换代,可你看得出这些潮没绕开它。它还认得你游来的方向。",
+                    f"{aft['name']}老了。它自己大概也知道——它待着不动的时候,比从前多了。",
+                ]))
         for bef, aft in zip(before["traces"], after["traces"]):
             if aft["kind"] == "song":
                 if aft["hop"] > bef["hop"]:
@@ -240,6 +251,9 @@ class Game:
         if after == "continued":
             return ("你留下的贝壳螺旋塌到一半,被不认识的谁续摆了几枚——方向摆反了,间距也不对,"
                     "可它接着往里卷。你的痕迹没有散,它被接着写了。写的人不知道你。")
+        if after == "carried":
+            return ("你摆的贝壳被小螃蟹们一枚一枚搬走了——不是冲着你,它们只是需要垫洞口的东西。"
+                    "螺旋没了,可每一枚都还在,散在好多户人家的门前。")
         if after == "adopted":
             return f"你留下的{thing}塌够了,螃蟹们绕着它走、把那儿当成老地方——你的痕迹成了别人的路标。"
         return TRACE_DECAY_NARR.get((ttype, before, after),
@@ -263,14 +277,32 @@ class Game:
             for nb in neighbors(tr["region"]):
                 if (tr["song_id"], nb) in seen:
                     continue
+                # 回声落地时保留原歌此刻的走样程度(把 taught_at 往回折算)——
+                # 飘到邻海的调子该是已经跑了样的,不该在新地方从头唱起。
+                life = C.SPECIES_LIFESPAN[tr["taught_species"]]
+                hops_now = T.song_hops(tr, self._now)
                 new_echoes.append({
                     "type": "song", "song_id": tr["song_id"], "region": nb,
-                    "taught_species": tr["taught_species"], "taught_at": self._now,
+                    "taught_species": tr["taught_species"],
+                    "taught_at": self._now - hops_now * life,
                     "echo": True, "origin_region": tr["region"],
                 })
                 seen.add((tr["song_id"], nb))
             tr["migrated"] = True
         self.world["traces"].extend(new_echoes)
+
+    def _song_foreshadow(self, dest: str) -> str | None:
+        """去往一片飘着你的歌的回声的海:半路先听见一段。每段回声只这么迎你一次。"""
+        for tr in self.world["traces"]:
+            if (tr["type"] == "song" and tr.get("echo") and tr["region"] == dest
+                    and not tr.get("foreshadowed")):
+                tr["foreshadowed"] = True
+                if self.rng.random() > C.SONG_FORESHADOW_CHANCE:
+                    return None
+                frm = REGION_NAMES.get(tr.get("origin_region", ""), "别处")
+                return (f"半路上,顺着水飘来一小段哼唱——走了样,可骨头你认得,是你在{frm}教出去的那半句。\n"
+                        f"它不知道被谁带着,比你先一步,到了你要去的这片海。")
+        return None
 
     # ---- 找 NPC(按名字或外观,容错)----
     def _present_npcs(self):
@@ -308,6 +340,12 @@ class Game:
     def look(self):
         self._settle_here()
         rid = self.world["current_region"]
+        # 刚看过、且一潮没过:不重画整片海,只给这一眼里新动的东西。
+        # (travel/linger 的结尾都带一次完整环顾——紧接着再 look,该是增量。)
+        fresh = self._fresh_look
+        if fresh == (rid, self._now):
+            return self._look_again()
+        self._fresh_look = (rid, self._now)
         parts = [REGION_MOOD[rid]]
 
         # 在场的朋友,按友善远近描述其姿态(不报数)
@@ -371,6 +409,20 @@ class Game:
                      f"可以随手垒石头、摆贝壳、教半句歌,也可以只是待着。"
                      f"{action_hint}{self._exits_sentence()}")
         return "\n\n".join(parts)
+
+    def _look_again(self) -> str:
+        """一潮未过、原地再看一眼:海没变,变的只有此刻谁在动。"""
+        head = self.rng.choice([
+            "还是刚才那片海。潮没换,光没挪,谁也没来得及变。",
+            "你又看了一圈。看两遍,海也不会变第二种样子——它不急着给你新的。",
+            "没什么新的。这不是海冷淡,是它诚实:一潮之内,它就是原样。",
+        ])
+        parts = [head]
+        interact = self._npc_interaction_line()
+        if interact:
+            parts.append(interact)
+        parts.append(self._exits_sentence())
+        return "\n".join(parts)
 
     def _presence_line(self, n: dict) -> str:
         """把友善深浅翻译成姿态,不报数。遗忘时先不点名。"""
@@ -456,11 +508,26 @@ class Game:
         self._pass_time(C.MOMENT_COST)
         return scene
 
+    def _turtle_era(self) -> str:
+        """认识阿龟多久了(她从第一潮就在)→ 她现在处于哪个时代。"""
+        if self._now >= C.TURTLE_ERA_LATE:
+            return "late"
+        if self._now >= C.TURTLE_ERA_MID:
+            return "mid"
+        return "early"
+
     def _greet_turtle(self, turtle: dict) -> str:
-        # 她替你保管记忆:挑一件你真留下过的事讲回来
+        # 她替你保管记忆:挑一件你真留下过的事讲回来。
+        # 台词按认识的年头分档,且尽量不跟上一次说的重样——
+        # 她是唯一不换代的朋友,重复的引擎痕迹在她身上最藏不住。
         recall = self._turtle_recall()
-        line = D.turtle_greeting(recall, rng=self.rng)
-        scene = f"阿龟一头撞进你怀里,四只脚还在划水。\n她说:「{line}」"
+        era = self._turtle_era()
+        said = self.world.setdefault("turtle_said", [])
+        arrive = D.turtle_arrival(era, rng=self.rng, avoid=said)
+        line = D.turtle_greeting(recall, rng=self.rng, era=era, avoid=said)
+        # 只记最近说过的几句,老话隔几次还能再说——她又不是复读机的反面
+        self.world["turtle_said"] = ([arrive, line] + said)[:4]
+        scene = f"{arrive}\n她说:「{line}」"
         # 若上一个你留过一封信,她一世只郑重地递一次
         letter = self.world.get("letter")
         if letter and not self._letter_delivered:
@@ -909,8 +976,12 @@ class Game:
         self._propagate_songs()   # 快照之后再迁徙,免得动到 before/after 的对齐
         far = "游了很久很久" if cost > 100 else ("游了好一阵" if cost > 50 else "没游多远")
         head = (f"你朝{REGION_NAMES[region_id]}去。{far},水色一路变着。你什么都没做,也不必做。")
-        # 途中偶遇
-        if self.rng.random() < C.ENCOUNTER_CHANCE_TRAVEL:
+        # 途中:目的地若飘着你的歌的回声,先让你在半路听见一耳朵——
+        # "水里有一股味道"不再散掉,它带你去它落脚的地方。一段回声只预告一次。
+        foreshadow = self._song_foreshadow(region_id)
+        if foreshadow:
+            head += "\n\n" + foreshadow
+        elif self.rng.random() < C.ENCOUNTER_CHANCE_TRAVEL:
             enc = roll_encounter(region_id, self.rng, is_travel=True)
             if enc:
                 head += "\n\n" + enc

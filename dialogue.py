@@ -130,11 +130,50 @@ APPEARANCE = {
 }
 
 # --- 阿龟:唯一的热情 NPC,永远先自报家门 ---
-TURTLE_HELLO = [
-    "是我呀!阿龟。",
-    "是我呀!你可能不记得了,没关系,我每次都当第一次那么高兴。",
-    "诶——是你!我是阿龟。你游得还是那么快。",
-]
+# 她不换代。所以她的"变"只能长在台词里——按认识的年头分三个时代:
+#   early: 刚认识,她逢人先自报家门,当你随时会忘了她
+#   mid:   熟了,她不解释自己是谁了,开始有"你走以后"这种句子
+#   late:  老朋友,她连热情都慢下来了——不是淡了,是笃定了
+# 迎接的动作也跟着变:从一头撞进怀里,到学会刹车,到只把头抵过来。
+
+TURTLE_ARRIVE = {
+    "early": [
+        "阿龟一头撞进你怀里,四只脚还在划水。",
+        "阿龟扑腾着冲过来,刹不住,壳先到的。",
+        "阿龟从老远就开始摆那四只脚,到跟前差点翻了个个儿。",
+    ],
+    "mid": [
+        "阿龟划着水过来,到跟前才收脚,稳稳停在你面前——撞你的次数多了,她学会刹了。",
+        "阿龟绕着你转了小半圈才停下,像在确认真的是你。确认完,她把脚一收,笑眯眯地浮着。",
+        "阿龟游过来,照旧撞了你一下——这回是故意的,轻轻的,像敲门。",
+    ],
+    "late": [
+        "阿龟游过来,不撞了,只把头轻轻抵在你身上,抵了一会儿。",
+        "阿龟慢慢靠过来,挨着你停住。老朋友之间,连迎接都可以是安静的。",
+        "阿龟浮过来,把四只脚全收了,顺着水漂完最后一段——她知道你会接住。",
+    ],
+}
+
+TURTLE_HELLO_BY_ERA = {
+    "early": [
+        "是我呀!阿龟。",
+        "是我呀!你可能不记得了,没关系,我每次都当第一次那么高兴。",
+        "诶——是你!我是阿龟。你游得还是那么快。",
+    ],
+    "mid": [
+        "是你!我就说这股水流不对——是你回来的水流。",
+        "你走以后我又绕着这片海转了好些圈。现在不用转了。",
+        "回来啦。我没等你——我就是刚好一直在这儿。",
+    ],
+    "late": [
+        "是你。都不用看,水一动我就知道。",
+        "老朋友。这片海换了多少茬,你一进水,我还是先认出你。",
+        "你回来了。好——那今天就是个好日子了。",
+    ],
+}
+
+# 旧名保留:等于 early 档,免得别处引用断掉
+TURTLE_HELLO = TURTLE_HELLO_BY_ERA["early"]
 TURTLE_KEEPS_MEMORY = "你上次走的时候,{recall}。我一直记着呢。"
 TURTLE_NO_MEMORY = [
     "你还没在这片海留下什么。没关系,你留不留,我都在这儿等你。",
@@ -154,6 +193,21 @@ TURTLE_TENDING = [
     "我在别的海听到了一段调子,有点像你教的,又不太像。它大概游了很远才到那儿。",
     "你教过的歌啊,我到处都能碰到一两句。每片海哼得都不一样,可骨头还认得出来。",
 ]
+
+# 熟了以后,她"看你本人"的方式也在变——句子里开始有共同的过去。
+TURTLE_TENDING_EXTRA = {
+    "mid": [
+        "你游过来的路线跟从前不一样了。不是好不好——就是,我看得出来。",
+        "我记性不算好,可关于你的我都记着。你自己忘了的那些,回头问我。",
+        "你上次坐过的那块地方,我后来常去待着。不为什么。",
+    ],
+    "late": [
+        "我们认识很久了。久到我不用问你去了哪儿——你回来,就都对了。",
+        "别的都在换,就你跟我还在。所以你每次回来,我都当一件大事。",
+        "我看过你留下的东西塌掉、跑调、被忘掉。你别难过——我都替你看着呢,一样没漏。",
+        "有时候你很久不来。我不数潮——数了显得像在等。可你一来我就知道,久了。",
+    ],
+}
 
 
 # ---- 朋友之间的关系：NPC 和 NPC 的互动 ----
@@ -289,11 +343,23 @@ def gift_line(memory_level: str, gift_kind: str, rng=random) -> str | None:
     return rng.choice(lines).format(gift=GIFT_SHORT[gift_kind])
 
 
-def turtle_greeting(recall, rng=random) -> str:
-    hello = rng.choice(TURTLE_HELLO)
-    # 有时她放下你留过的痕迹,只是看看你这个人
+def _pick_fresh(pool: list, rng, avoid) -> str:
+    """从池里抽一句,尽量避开上一次说过的。池只剩一句时只能重复——那就重复。"""
+    cand = [l for l in pool if not any(l in said for said in (avoid or ()))]
+    return rng.choice(cand if cand else pool)
+
+
+def turtle_arrival(era: str = "early", rng=random, avoid=None) -> str:
+    """阿龟迎接你的动作。刚认识是撞,熟了会刹,老朋友只把头抵过来。"""
+    return _pick_fresh(TURTLE_ARRIVE.get(era, TURTLE_ARRIVE["early"]), rng, avoid)
+
+
+def turtle_greeting(recall, rng=random, era: str = "early", avoid=None) -> str:
+    hello = _pick_fresh(TURTLE_HELLO_BY_ERA.get(era, TURTLE_HELLO), rng, avoid)
+    # 有时她放下你留过的痕迹,只是看看你这个人。熟了以后,这一档的话也更深。
     if rng.random() < TURTLE_TEND_CHANCE:
-        return hello + rng.choice(TURTLE_TENDING)
+        tend_pool = TURTLE_TENDING + TURTLE_TENDING_EXTRA.get(era, [])
+        return hello + _pick_fresh(tend_pool, rng, avoid)
     if recall:
         return hello + TURTLE_KEEPS_MEMORY.format(recall=recall)
     return hello + rng.choice(TURTLE_NO_MEMORY)
